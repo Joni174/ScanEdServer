@@ -103,7 +103,7 @@ async fn main() -> std::io::Result<()> {
         move || App::new()
             .service(auftrag_get)
             .app_data(state.clone()))
-        .bind("127.0.0.1:8003")?
+        .bind("0.0.0.0:8000")?
         .run()
         .await
 }

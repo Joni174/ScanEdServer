@@ -38,6 +38,7 @@ mod camera {
     use eye::traits::{ImageStream, Device};
     use eye::image::CowImage;
     use eye::prelude::Context;
+    use eye::format::FourCC;
 
     pub fn take_image<'a>(stream: &'a mut Box<ImageStream>) -> CowImage<'a> {
         let image = stream.next()
@@ -53,7 +54,13 @@ mod camera {
 
     pub fn start_camera() -> Box<dyn Device + Send> {
         let devices = Context::enumerate_devices();
-        let dev = Context::open_device(&devices[0]).expect("Failed to open video device");
+        let mut dev = Context::open_device(&devices[0]).expect("Failed to open video device");
+        let format = dev.format().expect("Unable to get Format from Camera");
+        dev.set_format(&eye::format::Format::new(
+            format.width,
+            format.height,
+            eye::format::PixelFormat::Custom(FourCC::new(b"JPEG"))))
+            .expect("Unable to set Pixel Format to JPEG");
         dev
     }
 }
