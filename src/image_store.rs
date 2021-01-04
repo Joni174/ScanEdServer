@@ -47,7 +47,7 @@ impl ImageStore {
 }
 
 fn save_image(name: &str, img: &[u8]) -> Result<(), io::Error> {
-    let mut file = File::open(image_folder().join(name))?;
+    let mut file = File::create(image_folder().join(name))?;
     file.write_all(img)?;
     Ok(())
 }
