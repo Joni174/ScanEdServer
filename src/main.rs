@@ -68,6 +68,7 @@ async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data
         Ok(image) => {
             HttpResponse::Ok()
                 .header("Content-Type", "image/jpeg")
+                .header("Content-Length", image.len().to_string())
                 .body(image)
         }
         Err(err) => {

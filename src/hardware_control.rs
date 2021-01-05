@@ -40,8 +40,8 @@ fn hardware_control_loop(progress: &Data<AppState>, shutdown_rx: Receiver<()>, a
 
             thread::sleep(Duration::from_secs(1));
             move_steps(steps);
+            update_status(&progress.fortschritt, round as i32, image_nr);
         }
-        update_status(&progress.fortschritt, round as i32, image_nr);
     }
 }
 
