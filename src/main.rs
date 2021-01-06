@@ -3,14 +3,15 @@ mod hardware_control;
 
 use actix_web::{HttpServer, web, HttpResponse, Responder, get, post, App};
 use serde::{Serialize, Deserialize};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Mutex, Arc};
 use std::ops::Deref;
 use crate::image_store::ImageStore;
 use std::process::exit;
 use log::{error, info};
 use crate::hardware_control::start_image_collection;
-use std::sync::mpsc::Sender;
 use env_logger::Env;
+use std::thread::JoinHandle;
+use actix_web::web::Data;
 
 const ENDPOINT_AUFNAHME: &'static str = "aufnahme";
 
@@ -37,11 +38,26 @@ impl Fortschritt {
 #[post("/auftrag")]
 async fn auftrag_post(auftrag_json: web::Json<Auftrag>, app_state: web::Data<AppState>) -> impl Responder {
     info!("serving post auftrag");
+    let shutdown_handle = Arc::clone(&app_state.shutdown_handle);
 
-    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-    *app_state.shutdown_handle.lock().unwrap() = Some(shutdown_tx);
-    start_image_collection(app_state, shutdown_rx, auftrag_json.0);
+    reset(&app_state, &shutdown_handle);
+
+    start_image_collection(
+        app_state,
+        shutdown_handle,
+        auftrag_json.0);
     HttpResponse::Ok()
+}
+
+fn reset(app_state: &Data<AppState>, shutdown_handle: &Arc<Mutex<bool>>) {
+    // shutdown previous image taking thread and wait for it
+    *shutdown_handle.lock().unwrap() = true;
+    if let Some(image_join_handle) = app_state.image_thread.lock().unwrap().take() {
+        image_join_handle.join().unwrap();
+    }
+    *shutdown_handle.lock().unwrap() = false;
+    *app_state.fortschritt.lock().unwrap() = Fortschritt{aufnahme: 0, runde: 0};
+    app_state.image_store.reset().expect("unable to reset image store");
 }
 
 #[get("/auftrag")]
@@ -73,8 +89,8 @@ async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data
         }
         Err(err) => {
             match err {
-                None => {HttpResponse::NotFound().finish()}
-                Some(io_err) => {HttpResponse::InternalServerError().body(io_err.to_string())}
+                None => { HttpResponse::NotFound().finish() }
+                Some(io_err) => { HttpResponse::InternalServerError().body(io_err.to_string()) }
             }
         }
     }
@@ -83,20 +99,25 @@ async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data
 pub struct AppState {
     fortschritt: Mutex<Fortschritt>,
     image_store: ImageStore,
-    shutdown_handle: Mutex<Option<Sender<()>>>,
+    shutdown_handle: Arc<Mutex<bool>>,
+    image_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl AppState {
     fn new() -> AppState {
         let image_store = match ImageStore::new() {
-            Ok(image_store) => {image_store}
-            Err(err) => {error!("{}", err); exit(1);}
+            Ok(image_store) => { image_store }
+            Err(err) => {
+                error!("{}", err);
+                exit(1);
+            }
         };
 
         AppState {
             fortschritt: Mutex::new(Fortschritt { runde: 0, aufnahme: 0 }),
             image_store,
-            shutdown_handle: Mutex::new(None)
+            shutdown_handle: Arc::new(Mutex::new(false)),
+            image_thread: Mutex::new(None),
         }
     }
 }

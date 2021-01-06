@@ -1,40 +1,40 @@
 use crate::{AppState, Auftrag};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::sync::mpsc::Receiver;
 use actix_web::web::Data;
 use crate::hardware_control::camera::{start_camera, get_camera_stream, take_image};
-use crate::hardware_control::image_communication::{reset, store_new_image, update_status};
+use crate::hardware_control::image_communication::{store_new_image, update_status};
 use crate::hardware_control::motor::{calculate_steps, move_steps};
 use std::time::Duration;
 use log::{info};
-use image::{ImageBuffer, RgbImage, EncodableLayout};
-use image::buffer::ConvertBuffer;
+use image::{RgbImage, EncodableLayout};
+use std::ops::Deref;
+use std::thread::JoinHandle;
 
 pub fn start_image_collection(progress: actix_web::web::Data<AppState>,
-                              shutdown_rx: mpsc::Receiver<()>,
-                              auftrag: Auftrag) {
-    thread::spawn(move || hardware_control_loop(&progress, shutdown_rx, auftrag));
+                              shutdown_rx: Arc<Mutex<bool>>,
+                              auftrag: Auftrag) -> JoinHandle<()> {
+    thread::spawn(move || hardware_control_loop(&progress, shutdown_rx, auftrag))
 }
 
-fn hardware_control_loop(progress: &Data<AppState>, shutdown_rx: Receiver<()>, auftrag: Auftrag) {
+fn hardware_control_loop(progress: &Data<AppState>, shutdown_rx: Arc<Mutex<bool>>, auftrag: Auftrag) {
     // let camera = start_camera();
     // let mut stream = get_camera_stream(camera);
     for (round, images_this_round) in auftrag.auftrag.iter().enumerate() {
         for image_nr in 0..*images_this_round {
             info!("taking image");
 
-            // reset request was made
-            if shutdown_rx.try_recv() == Ok(()) {
-                info!("Stoppe Auftrag");
-                reset(&progress.image_store);
-                return;
-            }
-
             // let image = take_image(&mut stream);
             let image = new_random_image();
 
-            store_new_image(&progress.image_store, round, image_nr, &image);
+            let shutdown_flag = shutdown_rx.lock().unwrap();
+            if *shutdown_flag.deref() {
+                info!("got shutdown message");
+                return;
+            } else {
+                store_new_image(&progress.image_store, round, image_nr, &image);
+            }
+            drop(shutdown_flag);
 
             let steps = calculate_steps(*images_this_round as u32);
 
@@ -43,6 +43,7 @@ fn hardware_control_loop(progress: &Data<AppState>, shutdown_rx: Receiver<()>, a
             update_status(&progress.fortschritt, round as i32, image_nr);
         }
     }
+    info!("Finished taking images")
 }
 
 mod camera {
@@ -80,7 +81,6 @@ mod image_communication {
     use crate::image_store::ImageStore;
     use crate::Fortschritt;
     use std::sync::Mutex;
-    use eye::image::CowImage;
 
     pub fn update_status(fortschritt: &Mutex<Fortschritt>, current_round: i32, current_image: i32) {
         let mut fortschritt = fortschritt.lock().unwrap();
@@ -92,10 +92,6 @@ mod image_communication {
         image_store.store_image(
             format!("{}_{}.jpg", round, image_nr),
             &image).expect("Error storing image");
-    }
-
-    pub fn reset(image_store: &ImageStore) {
-        image_store.reset().expect("Error resetting image store")
     }
 }
 
@@ -128,6 +124,7 @@ fn new_random_image() -> Vec<u8> {
     }
     let mut vec = Vec::<u8>::new();
     let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut vec);
-    encoder.encode(image.as_bytes(), width, height, image::ColorType::Rgb8);
+    encoder.encode(image.as_bytes(), width, height, image::ColorType::Rgb8)
+        .expect("unable to encode test image");
     vec
 }
