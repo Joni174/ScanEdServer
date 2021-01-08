@@ -10,6 +10,10 @@ use log::{info};
 use image::{RgbImage, EncodableLayout};
 use std::ops::Deref;
 use std::thread::JoinHandle;
+use std::path::{PathBuf, Path};
+use std::str::FromStr;
+use std::fs::File;
+use std::io::Read;
 
 pub fn start_image_collection(progress: actix_web::web::Data<AppState>,
                               shutdown_rx: Arc<Mutex<bool>>,
@@ -20,12 +24,18 @@ pub fn start_image_collection(progress: actix_web::web::Data<AppState>,
 fn hardware_control_loop(progress: &Data<AppState>, shutdown_rx: Arc<Mutex<bool>>, auftrag: Auftrag) {
     // let camera = start_camera();
     // let mut stream = get_camera_stream(camera);
+
+    // testing
+    let mut dir = std::fs::read_dir(TEST_IMAGE_FOLDER).unwrap();
+    let mut available_images = dir.map(|path| path.unwrap()).collect::<Vec<_>>();
+
     for (round, images_this_round) in auftrag.auftrag.iter().enumerate() {
         for image_nr in 0..*images_this_round {
             info!("taking image");
 
             // let image = take_image(&mut stream);
-            let image = new_random_image();
+
+            let image = new_random_image(available_images.pop().unwrap().path());
 
             let shutdown_flag = shutdown_rx.lock().unwrap();
             if *shutdown_flag.deref() {
@@ -101,7 +111,6 @@ mod motor {
             // motor on
             // delay
             // motor off
-            // delay
         }
     }
 
@@ -110,21 +119,27 @@ mod motor {
     }
 }
 
-fn new_random_image() -> Vec<u8> {
-    let width : u32 = 300;
-    let height: u32 = 300;
-    let mut image: RgbImage = image::RgbImage::new(width, height);
-    let c1 = rand::random::<u8>();
-    let c2 = rand::random::<u8>();
-    let c3 = rand::random::<u8>();
-    for x in 0..width {
-        for y in 0..height {
-            image.put_pixel(x, y, image::Rgb([c1, c2, c3]));
-        }
-    }
-    let mut vec = Vec::<u8>::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut vec);
-    encoder.encode(image.as_bytes(), width, height, image::ColorType::Rgb8)
-        .expect("unable to encode test image");
-    vec
+// fn new_random_image() -> Vec<u8> {
+//     let width : u32 = 300;
+//     let height: u32 = 300;
+//     let mut image: RgbImage = image::RgbImage::new(width, height);
+//     let c1 = rand::random::<u8>();
+//     let c2 = rand::random::<u8>();
+//     let c3 = rand::random::<u8>();
+//     for x in 0..width {
+//         for y in 0..height {
+//             image.put_pixel(x, y, image::Rgb([c1, c2, c3]));
+//         }
+//     }
+//     let mut vec = Vec::<u8>::new();
+//     let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut vec);
+//     encoder.encode(image.as_bytes(), width, height, image::ColorType::Rgb8)
+//         .expect("unable to encode test image");
+//     vec
+// }
+
+fn new_random_image(image_path: PathBuf) -> Vec<u8> {
+    std::fs::read(image_path.to_path_buf()).unwrap()
 }
+
+const TEST_IMAGE_FOLDER: &'static str = "test_images";
