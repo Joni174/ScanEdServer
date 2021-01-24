@@ -1,72 +1,129 @@
 use crate::{AppState, Auftrag};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use actix_web::web::Data;
 use crate::hardware_control::camera::{start_camera, get_camera_stream, take_image};
 use crate::hardware_control::image_communication::{store_new_image, update_status};
-use crate::hardware_control::motor::{calculate_steps, move_steps};
 use std::time::Duration;
-use log::{info};
-use image::{RgbImage, EncodableLayout};
+use log::{info, warn};
 use std::ops::Deref;
 use std::thread::JoinHandle;
-use std::path::{PathBuf, Path};
-use std::str::FromStr;
-use std::fs::File;
-use std::io::Read;
+use rust_gpiozero::*;
+use crate::image_store::ImageStore;
+use eye::traits::{ImageStream};
 
 pub fn start_image_collection(progress: actix_web::web::Data<AppState>,
                               shutdown_rx: Arc<Mutex<bool>>,
                               auftrag: Auftrag) -> JoinHandle<()> {
-    thread::spawn(move || hardware_control_loop(&progress, shutdown_rx, auftrag))
+    thread::spawn(move || motor_movement(progress, shutdown_rx, auftrag.auftrag))
 }
 
-fn hardware_control_loop(progress: &Data<AppState>, shutdown_rx: Arc<Mutex<bool>>, auftrag: Auftrag) {
-    // let camera = start_camera();
-    // let mut stream = get_camera_stream(camera);
+fn motor_movement(progress: actix_web::web::Data<AppState>,
+                  shutdown_rx: Arc<Mutex<bool>>,
+                  runden:Vec<i32>) {
+    let ms1 = LED::new(4);
+    let ms2 = LED::new(3);
+    let ms3 = LED::new(2);
+    let dir = LED::new(14);
+    let step = LED::new(15);
 
-    // testing
-    let mut dir = std::fs::read_dir(TEST_IMAGE_FOLDER).unwrap();
-    let mut available_images = dir.map(|path| path.unwrap()).collect::<Vec<_>>();
+    let led_user = LED::new(17);
+    let led_error = LED::new(22);
+    let led_cam = LED::new(27);
+    let mut button = Button::new(23);
 
-    for (round, images_this_round) in auftrag.auftrag.iter().enumerate() {
-        for image_nr in 0..*images_this_round {
-            info!("taking image");
+    let camera = start_camera();
+    let mut stream = get_camera_stream(camera);
 
-            // let image = take_image(&mut stream);
+    ms1.on();
+    ms2.on();
+    ms3.on();
+    dir.on();
+    led_error.on();
+    led_user.on();
+    led_cam.on();
+    thread::sleep(Duration::from_secs(3));
 
-            let image = new_random_image(available_images.pop().unwrap().path());
+    led_error.off();
+    led_user.off();
+    led_cam.off();
 
-            let shutdown_flag = shutdown_rx.lock().unwrap();
-            if *shutdown_flag.deref() {
-                info!("got shutdown message");
+    for (round, number_images) in runden.iter().enumerate() {
+
+        // user input button must be pressed to start round
+        wait_for_button_press(&led_user, &mut button);
+
+        for image_nr in 0..*number_images {
+            motor::move_pulses(&step, &number_images);
+
+            handle_new_image(&progress.image_store, &led_cam, &mut stream, round, image_nr);
+
+            if shutdown_message_arrived(&shutdown_rx) {
                 return;
-            } else {
-                store_new_image(&progress.image_store, round, image_nr, &image);
             }
-            drop(shutdown_flag);
 
-            let steps = calculate_steps(*images_this_round as u32);
-
-            thread::sleep(Duration::from_secs(1));
-            move_steps(steps);
             update_status(&progress.fortschritt, round as i32, image_nr);
         }
+        info!("Finished taking images")
     }
-    info!("Finished taking images")
+}
+
+fn handle_new_image<'a>(image_store: &ImageStore,
+                        led_cam: &LED,
+                        mut stream: &'a mut Box<ImageStream>,
+                        round: usize, image_nr: i32) {
+    led_cam.on();
+    info!("taking image");
+    let image = take_image(&mut stream);
+    store_new_image(&image_store, round, image_nr, &image);
+    led_cam.off();
+}
+
+fn shutdown_message_arrived(shutdown_rx: &Arc<Mutex<bool>>) -> bool {
+    let shutdown_flag = shutdown_rx.lock().unwrap();
+    if *shutdown_flag.deref() {
+        warn!("got shutdown message");
+        true
+    } else {
+        false
+    }
+}
+
+fn wait_for_button_press(led_user: &LED, button: &mut Button) {
+    led_user.on();
+    button.wait_for_press(None);
+    led_user.off();
+}
+
+mod motor {
+    use rust_gpiozero::LED;
+    use std::thread;
+    use std::time::Duration;
+
+    const STEPS_FOR_FULL_ROTATION: i32 = 3200;
+    const MICROS_PULSE: u64 = 100;
+
+
+    pub fn move_pulses(step: &LED, number_images: &i32) {
+        let pulses: usize = STEPS_FOR_FULL_ROTATION as usize / *number_images as usize;
+        for _ in 0..pulses {
+            step.on();
+            thread::sleep(Duration::from_micros(MICROS_PULSE));
+            step.off();
+            thread::sleep(Duration::from_micros(MICROS_PULSE));
+        }
+    }
 }
 
 mod camera {
     use eye::traits::{ImageStream, Device};
-    use eye::image::CowImage;
     use eye::prelude::Context;
     use eye::format::FourCC;
 
-    pub fn take_image<'a>(stream: &'a mut Box<ImageStream>) -> CowImage<'a> {
+    pub fn take_image<'a>(stream: &'a mut Box<ImageStream>) -> Vec<u8> {
         let image = stream.next()
             .expect("Camera stream is dead")
             .expect("Failed to capture frame");
-        image
+        image.into_bytes().collect::<Vec<_>>()
     }
 
     pub fn get_camera_stream<'a>(dev: Box<dyn Device + Send>) -> Box<ImageStream<'a>> {
@@ -101,23 +158,11 @@ mod image_communication {
     pub fn store_new_image(image_store: &ImageStore, round: usize, image_nr: i32, image: &Vec<u8>) {
         image_store.store_image(
             format!("{}_{}.jpg", round, image_nr),
-            &image).expect("Error storing image");
+            &image
+        ).expect("Error storing image");
     }
 }
 
-mod motor {
-    pub fn move_steps(pulses: u32) {
-        for _ in 0..pulses {
-            // motor on
-            // delay
-            // motor off
-        }
-    }
-
-    pub fn calculate_steps(_images_for_round: u32) -> u32 {
-        1
-    }
-}
 
 // fn new_random_image() -> Vec<u8> {
 //     let width : u32 = 300;
@@ -138,8 +183,8 @@ mod motor {
 //     vec
 // }
 
-fn new_random_image(image_path: PathBuf) -> Vec<u8> {
-    std::fs::read(image_path.to_path_buf()).unwrap()
-}
+// fn new_random_image(image_path: PathBuf) -> Vec<u8> {
+//     std::fs::read(image_path.to_path_buf()).unwrap()
+// }
 
-const TEST_IMAGE_FOLDER: &'static str = "test_images";
+// const TEST_IMAGE_FOLDER: &'static str = "test_images";
