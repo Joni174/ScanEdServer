@@ -1,7 +1,7 @@
 use crate::{AppState, Auftrag};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use crate::hardware_control::camera::{start_camera, get_camera_stream, take_image};
+use crate::hardware_control::camera::{start_camera};
 use crate::hardware_control::image_communication::{store_new_image, update_status};
 use std::time::Duration;
 use log::{info, warn};
@@ -9,7 +9,6 @@ use std::ops::Deref;
 use std::thread::JoinHandle;
 use rust_gpiozero::*;
 use crate::image_store::ImageStore;
-use eye::traits::{ImageStream};
 use rascam::SimpleCamera;
 
 pub fn start_image_collection(progress: actix_web::web::Data<AppState>,
@@ -32,7 +31,7 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
     let led_cam = LED::new(27);
     let mut button = Button::new(23);
 
-    let camera = start_camera();
+    let mut camera = start_camera();
 
     ms1.on();
     ms2.on();
@@ -70,7 +69,7 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
 
 fn handle_new_image<'a>(image_store: &ImageStore,
                         led_cam: &LED,
-                        mut camera: SimpleCamera,
+                        camera: &mut SimpleCamera,
                         round: usize, image_nr: i32) {
     led_cam.on();
     info!("taking image");
@@ -117,10 +116,11 @@ mod motor {
 
 mod camera {
     use std::{time, thread};
-    use rascam::SimpleCamera;
+    use rascam::*;
 
     pub fn start_camera() -> SimpleCamera {
-        let mut camera = SimpleCamera::new(info.clone()).unwrap();
+        let info = info().unwrap();
+        let mut camera = SimpleCamera::new(info.cameras[0].clone()).unwrap();
         camera.activate().unwrap();
 
         let sleep_duration = time::Duration::from_millis(2000);
