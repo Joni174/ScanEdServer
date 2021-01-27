@@ -10,6 +10,7 @@ use std::thread::JoinHandle;
 use rust_gpiozero::*;
 use crate::image_store::ImageStore;
 use eye::traits::{ImageStream};
+use rascam::SimpleCamera;
 
 pub fn start_image_collection(progress: actix_web::web::Data<AppState>,
                               shutdown_rx: Arc<Mutex<bool>>,
@@ -32,12 +33,12 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
     let mut button = Button::new(23);
 
     let camera = start_camera();
-    let mut stream = get_camera_stream(camera);
 
     ms1.on();
     ms2.on();
     ms3.on();
     dir.on();
+
     led_error.on();
     led_user.on();
     led_cam.on();
@@ -55,7 +56,7 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
         for image_nr in 0..*number_images {
             motor::move_pulses(&step, &number_images);
 
-            handle_new_image(&progress.image_store, &led_cam, &mut stream, round, image_nr);
+            handle_new_image(&progress.image_store, &led_cam, &mut camera, round, image_nr);
 
             if shutdown_message_arrived(&shutdown_rx) {
                 return;
@@ -69,11 +70,11 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
 
 fn handle_new_image<'a>(image_store: &ImageStore,
                         led_cam: &LED,
-                        mut stream: &'a mut Box<ImageStream>,
+                        mut camera: SimpleCamera,
                         round: usize, image_nr: i32) {
     led_cam.on();
     info!("taking image");
-    let image = take_image(&mut stream);
+    let image = camera.take_one().expect("unable to take image with camera");
     store_new_image(&image_store, round, image_nr, &image);
     led_cam.off();
 }
@@ -115,32 +116,16 @@ mod motor {
 }
 
 mod camera {
-    use eye::traits::{ImageStream, Device};
-    use eye::prelude::Context;
-    use eye::format::FourCC;
+    use std::{time, thread};
+    use rascam::SimpleCamera;
 
-    pub fn take_image<'a>(stream: &'a mut Box<ImageStream>) -> Vec<u8> {
-        let image = stream.next()
-            .expect("Camera stream is dead")
-            .expect("Failed to capture frame");
-        image.into_bytes().collect::<Vec<_>>()
-    }
+    pub fn start_camera() -> SimpleCamera {
+        let mut camera = SimpleCamera::new(info.clone()).unwrap();
+        camera.activate().unwrap();
 
-    pub fn get_camera_stream<'a>(dev: Box<dyn Device + Send>) -> Box<ImageStream<'a>> {
-        let stream = dev.stream().expect("Failed to setup capture stream");
-        stream
-    }
-
-    pub fn start_camera() -> Box<dyn Device + Send> {
-        let devices = Context::enumerate_devices();
-        let mut dev = Context::open_device(&devices[0]).expect("Failed to open video device");
-        let format = dev.format().expect("Unable to get Format from Camera");
-        dev.set_format(&eye::format::Format::new(
-            format.width,
-            format.height,
-            eye::format::PixelFormat::Custom(FourCC::new(b"JPEG"))))
-            .expect("Unable to set Pixel Format to JPEG");
-        dev
+        let sleep_duration = time::Duration::from_millis(2000);
+        thread::sleep(sleep_duration);
+        camera
     }
 }
 
