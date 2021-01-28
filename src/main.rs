@@ -10,12 +10,12 @@ use std::process::exit;
 use log::{error, info};
 use crate::hardware_control::start_image_collection;
 use env_logger::Env;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 use actix_web::web::Data;
 
 const ENDPOINT_AUFNAHME: &'static str = "aufnahme";
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Auftrag {
     pub auftrag: Vec<i32>
 }
@@ -37,23 +37,23 @@ impl Fortschritt {
 
 #[post("/auftrag")]
 async fn auftrag_post(auftrag_json: web::Json<Auftrag>, app_state: web::Data<AppState>) -> impl Responder {
-    info!("serving post auftrag");
+    info!("got auftrag: {:?}", &auftrag_json.0);
     let shutdown_handle = Arc::clone(&app_state.shutdown_handle);
 
-    reset(&app_state, &shutdown_handle);
+    reset(&app_state, &shutdown_handle).await;
 
     start_image_collection(
         app_state,
         shutdown_handle,
-        auftrag_json.0);
+        auftrag_json.0).await;
     HttpResponse::Ok()
 }
 
-fn reset(app_state: &Data<AppState>, shutdown_handle: &Arc<Mutex<bool>>) {
+async fn reset(app_state: &Data<AppState>, shutdown_handle: &Arc<Mutex<bool>>) {
     // shutdown previous image taking thread and wait for it
     *shutdown_handle.lock().unwrap() = true;
     if let Some(image_join_handle) = app_state.image_thread.lock().unwrap().take() {
-        image_join_handle.join().unwrap();
+        image_join_handle.await.unwrap_or_else(|_err| {error!("unable to reset image taking process as it has already stopped");});
     }
     *shutdown_handle.lock().unwrap() = false;
     *app_state.fortschritt.lock().unwrap() = Fortschritt{aufnahme: 0, runde: 0};

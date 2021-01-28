@@ -6,15 +6,16 @@ use crate::hardware_control::image_communication::{store_new_image, update_statu
 use std::time::Duration;
 use log::{info, warn};
 use std::ops::Deref;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 use rust_gpiozero::*;
 use crate::image_store::ImageStore;
 use rascam::SimpleCamera;
 
-pub fn start_image_collection(progress: actix_web::web::Data<AppState>,
+
+pub async fn start_image_collection(progress: actix_web::web::Data<AppState>,
                               shutdown_rx: Arc<Mutex<bool>>,
                               auftrag: Auftrag) -> JoinHandle<()> {
-    thread::spawn(move || motor_movement(progress, shutdown_rx, auftrag.auftrag))
+    tokio::task::spawn_blocking(move || motor_movement(progress, shutdown_rx, auftrag.auftrag))
 }
 
 fn motor_movement(progress: actix_web::web::Data<AppState>,
@@ -41,7 +42,7 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
     led_error.on();
     led_user.on();
     led_cam.on();
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(Duration::from_secs(1));
 
     led_error.off();
     led_user.off();
@@ -50,6 +51,7 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
     for (round, number_images) in runden.iter().enumerate() {
 
         // user input button must be pressed to start round
+        info!("wait for user input");
         wait_for_button_press(&led_user, &mut button);
 
         for image_nr in 0..*number_images {
@@ -63,7 +65,7 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
 
             update_status(&progress.fortschritt, round as i32, image_nr);
         }
-        info!("Finished taking images")
+        info!("round finished")
     }
 }
 
@@ -72,7 +74,7 @@ fn handle_new_image<'a>(image_store: &ImageStore,
                         camera: &mut SimpleCamera,
                         round: usize, image_nr: i32) {
     led_cam.on();
-    info!("taking image");
+    info!("taking image round: {}, image: {}", round, image_nr);
     let image = camera.take_one().expect("unable to take image with camera");
     store_new_image(&image_store, round, image_nr, &image);
     led_cam.off();
@@ -99,8 +101,11 @@ mod motor {
     use std::thread;
     use std::time::Duration;
 
+
+
     const STEPS_FOR_FULL_ROTATION: i32 = 3200;
     const MICROS_PULSE: u64 = 100;
+    const MICROS_SPEED_CONTROL: u64 = 4000;
 
 
     pub fn move_pulses(step: &LED, number_images: &i32) {
@@ -109,7 +114,7 @@ mod motor {
             step.on();
             thread::sleep(Duration::from_micros(MICROS_PULSE));
             step.off();
-            thread::sleep(Duration::from_micros(MICROS_PULSE));
+            thread::sleep(Duration::from_micros(MICROS_SPEED_CONTROL));
         }
     }
 }
@@ -125,6 +130,10 @@ mod camera {
 
         let sleep_duration = time::Duration::from_millis(2000);
         thread::sleep(sleep_duration);
+        camera.take_one().expect("unable to take first initialization image");
+        camera.take_one().expect("unable to take second initialization image");
+        camera.take_one().expect("unable to take third initialization image");
+
         camera
     }
 }

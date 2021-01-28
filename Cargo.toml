@@ -16,3 +16,4 @@ image = "0.23.12"
 rand = "0.8.1"
 rust_gpiozero = "0.2.0"
 rascam = "0.0.2"
+tokio = {version="0.2.24", features=["full"]}
