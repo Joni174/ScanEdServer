@@ -3,8 +3,7 @@ mod hardware_control;
 
 use actix_web::{HttpServer, web, HttpResponse, Responder, get, post, App};
 use serde::{Serialize, Deserialize};
-use std::sync::{Mutex, Arc};
-use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 use crate::image_store::ImageStore;
 use std::process::exit;
 use log::{error, info};
@@ -12,6 +11,7 @@ use crate::hardware_control::start_image_collection;
 use env_logger::Env;
 use tokio::task::JoinHandle;
 use actix_web::web::Data;
+use std::ops::Deref;
 
 const ENDPOINT_AUFNAHME: &'static str = "aufnahme";
 
@@ -57,7 +57,7 @@ async fn reset(app_state: &Data<AppState>, shutdown_handle: &Arc<Mutex<bool>>) {
     }
     *shutdown_handle.lock().unwrap() = false;
     *app_state.fortschritt.lock().unwrap() = Fortschritt{aufnahme: 0, runde: 0};
-    app_state.image_store.reset().expect("unable to reset image store");
+    app_state.image_store.lock().unwrap().reset().unwrap();
 }
 
 #[get("/auftrag")]
@@ -70,8 +70,9 @@ async fn auftrag_get(data: web::Data<AppState>) -> impl Responder {
 #[get("/aufnahme")]
 async fn aufnahme_get(progress: web::Data<AppState>) -> impl Responder {
     info!("serving aufnahmen index");
-    let progress = progress.image_store.get_image_list();
-    let image_paths = progress.iter()
+    let image_store = progress.image_store.lock().unwrap();
+    let image_list = image_store.get_image_list();
+    let image_paths = image_list.iter()
         .map(|image_name| format!("/{}/{}", ENDPOINT_AUFNAHME, image_name))
         .collect::<Vec<_>>();
     HttpResponse::Ok().json(image_paths)
@@ -80,7 +81,8 @@ async fn aufnahme_get(progress: web::Data<AppState>) -> impl Responder {
 #[get("/aufnahme/{name}")]
 async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data<AppState>) -> impl Responder {
     info!("serving aufnahme: {}", image_name.0);
-    match app_state.image_store.get_image(&image_name.0) {
+    let image = app_state.image_store.lock().unwrap();
+    match image.get_image(&image_name.0) {
         Ok(image) => {
             HttpResponse::Ok()
                 .header("Content-Type", "image/jpeg")
@@ -98,7 +100,7 @@ async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data
 
 pub struct AppState {
     fortschritt: Mutex<Fortschritt>,
-    image_store: ImageStore,
+    image_store: Mutex<ImageStore>,
     shutdown_handle: Arc<Mutex<bool>>,
     image_thread: Mutex<Option<JoinHandle<()>>>,
 }
@@ -115,7 +117,7 @@ impl AppState {
 
         AppState {
             fortschritt: Mutex::new(Fortschritt { runde: 0, aufnahme: 0 }),
-            image_store,
+            image_store: Mutex::new(image_store),
             shutdown_handle: Arc::new(Mutex::new(false)),
             image_thread: Mutex::new(None),
         }
@@ -138,6 +140,7 @@ async fn main() -> std::io::Result<()> {
             .service(aufnahme_single_get)
             .app_data(state.clone()))
         .bind("0.0.0.0:8000")?
+        .workers(3)
         .run()
         .await
 }

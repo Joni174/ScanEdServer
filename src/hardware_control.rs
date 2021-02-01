@@ -62,14 +62,14 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
             if shutdown_message_arrived(&shutdown_rx) {
                 return;
             }
-
+            thread::sleep(Duration::from_millis(400));
             update_status(&progress.fortschritt, round as i32, image_nr);
         }
         info!("round finished")
     }
 }
 
-fn handle_new_image<'a>(image_store: &ImageStore,
+fn handle_new_image<'a>(image_store: &Mutex<ImageStore>,
                         led_cam: &LED,
                         camera: &mut SimpleCamera,
                         round: usize, image_nr: i32) {
@@ -149,8 +149,8 @@ mod image_communication {
         fortschritt.set_runde(current_round + 1);
     }
 
-    pub fn store_new_image(image_store: &ImageStore, round: usize, image_nr: i32, image: &Vec<u8>) {
-        image_store.store_image(
+    pub fn store_new_image(image_store: &Mutex<ImageStore>, round: usize, image_nr: i32, image: &Vec<u8>) {
+        image_store.lock().unwrap().store_image(
             format!("{}_{}.jpg", round, image_nr),
             &image
         ).expect("Error storing image");

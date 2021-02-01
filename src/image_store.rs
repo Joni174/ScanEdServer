@@ -1,4 +1,3 @@
-use std::sync::Mutex;
 use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::path::PathBuf;
@@ -9,39 +8,35 @@ use std::io::{Write, Read};
 use std::ops::Deref;
 
 pub struct ImageStore {
-    image_list: Mutex<HashSet<String>>,
+    image_list: HashSet<String>,
 }
 
 impl ImageStore {
     pub fn new() -> io::Result<ImageStore> {
         init_dir()?;
-        Ok(ImageStore { image_list: Mutex::new(HashSet::new()) })
+        Ok(ImageStore { image_list: HashSet::new()})
     }
 
-    pub fn store_image(&self, name: String, image: &[u8]) -> io::Result<()> {
-        let mut image_list = self.image_list.lock().unwrap();
+    pub fn store_image(&mut self, name: String, image: &[u8]) -> io::Result<()> {
         save_image(&name, image)?;
-        image_list.insert(name);
+        self.image_list.insert(name);
         Ok(())
     }
 
     pub fn get_image_list(&self) -> Vec<String> {
-        let image_list = self.image_list.lock().unwrap();
-        Vec::from_iter(image_list.deref().clone().into_iter())
+        Vec::from_iter(self.image_list.clone().into_iter())
     }
 
     pub fn get_image(&self, name: &String) -> Result<Vec<u8>, Option<io::Error>> {
-        let image_list = self.image_list.lock().unwrap();
-        if image_list.contains(name) {
+        if self.image_list.contains(name) {
             Ok(read_image(name).map_err(|err| Some(err))?)
         } else {
             Err(None)
         }
     }
 
-    pub fn reset(&self) -> io::Result<()> {
-        let mut image_list = self.image_list.lock().unwrap();
-        image_list.clear();
+    pub fn reset(&mut self) -> io::Result<()> {
+        self.image_list.clear();
         init_dir()
     }
 }
