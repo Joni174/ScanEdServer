@@ -1,30 +1,26 @@
-use std::ops::Deref;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-
-use actix_web::rt::time::delay_for;
-use log::{info, warn};
-use rascam::SimpleCamera;
-use rust_gpiozero::*;
-use tokio::sync::Mutex;
-
 use crate::{AppState, Auftrag};
-use crate::hardware_control::camera::start_camera;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use crate::hardware_control::camera::{start_camera};
 use crate::hardware_control::image_communication::{store_new_image, update_status};
+use std::time::Duration;
+use log::{info, warn};
+use std::ops::Deref;
+use tokio::task::JoinHandle;
+use rust_gpiozero::*;
 use crate::image_store::ImageStore;
+use rascam::SimpleCamera;
+
 
 pub async fn start_image_collection(progress: actix_web::web::Data<AppState>,
-                                    shutdown_rx: Arc<Mutex<bool>>,
-                                    auftrag: Auftrag) {
-    tokio::task::spawn(async move {
-        motor_movement(progress, shutdown_rx, auftrag.auftrag).await
-    });
+                              shutdown_rx: Arc<Mutex<bool>>,
+                              auftrag: Auftrag) -> JoinHandle<()> {
+    tokio::task::spawn_blocking(move || motor_movement(progress, shutdown_rx, auftrag.auftrag))
 }
 
-async fn motor_movement(progress: actix_web::web::Data<AppState>,
-                        shutdown_rx: Arc<Mutex<bool>>,
-                        runden: Vec<i32>) {
+fn motor_movement(progress: actix_web::web::Data<AppState>,
+                  shutdown_rx: Arc<Mutex<bool>>,
+                  runden:Vec<i32>) {
     let ms1 = LED::new(4);
     let ms2 = LED::new(3);
     let ms3 = LED::new(2);
@@ -36,7 +32,7 @@ async fn motor_movement(progress: actix_web::web::Data<AppState>,
     let led_cam = LED::new(27);
     let mut button = Button::new(23);
 
-    let mut camera = start_camera().await;
+    let mut camera = start_camera();
 
     ms1.on();
     ms2.on();
@@ -46,8 +42,7 @@ async fn motor_movement(progress: actix_web::web::Data<AppState>,
     led_error.on();
     led_user.on();
     led_cam.on();
-
-    delay_for(Duration::from_secs(1)).await;
+    thread::sleep(Duration::from_secs(1));
 
     led_error.off();
     led_user.off();
@@ -57,87 +52,78 @@ async fn motor_movement(progress: actix_web::web::Data<AppState>,
 
         // user input button must be pressed to start round
         info!("wait for user input");
-        wait_for_button_press(&led_user, &mut button).await;
+        wait_for_button_press(&led_user, &mut button);
 
         for image_nr in 0..*number_images {
-            motor::move_pulses(&step, &number_images).await;
+            motor::move_pulses(&step, &number_images);
 
-            camera = handle_new_image(&progress.image_store, &led_cam, camera, round, image_nr).await;
+            handle_new_image(&progress.image_store, &led_cam, &mut camera, round, image_nr);
 
-            if shutdown_message_arrived(&shutdown_rx).await {
+            if shutdown_message_arrived(&shutdown_rx) {
                 return;
             }
-
-            update_status(&progress.fortschritt, round as i32, image_nr).await;
+            thread::sleep(Duration::from_millis(400));
+            update_status(&progress.fortschritt, round as i32, image_nr);
         }
         info!("round finished")
     }
 }
 
-async fn handle_new_image<'a>(image_store: &ImageStore,
-                              led_cam: &LED,
-                              mut camera: SimpleCamera,
-                              round: usize, image_nr: i32) -> SimpleCamera {
+fn handle_new_image<'a>(image_store: &Mutex<ImageStore>,
+                        led_cam: &LED,
+                        camera: &mut SimpleCamera,
+                        round: usize, image_nr: i32) {
     led_cam.on();
     info!("taking image round: {}, image: {}", round, image_nr);
     let image = camera.take_one().expect("unable to take image with camera");
-    store_new_image(image_store, round, image_nr, &image).await;
+    store_new_image(&image_store, round, image_nr, &image);
     led_cam.off();
-    camera
 }
 
-async fn shutdown_message_arrived(shutdown_rx: &Arc<Mutex<bool>>) -> bool {
-    let shutdown_flag = shutdown_rx.lock().await;
+fn shutdown_message_arrived(shutdown_rx: &Arc<Mutex<bool>>) -> bool {
+    let shutdown_flag = shutdown_rx.lock().unwrap();
     if *shutdown_flag.deref() {
         warn!("got shutdown message");
-        *shutdown_flag = false;
         true
     } else {
         false
     }
 }
 
-async fn wait_for_button_press(led_user: &LED, button: &mut Button) {
-    let led_user = led_user.clone();
-    tokio::task::spawn_blocking(move || {
-        led_user.on();
-        button.wait_for_press(None);
-        led_user.off();
-    }).await.expect("unable to spawn task");
+fn wait_for_button_press(led_user: &LED, button: &mut Button) {
+    led_user.on();
+    button.wait_for_press(None);
+    led_user.off();
 }
 
 mod motor {
+    use rust_gpiozero::LED;
     use std::thread;
     use std::time::Duration;
 
-    use rust_gpiozero::LED;
+
 
     const STEPS_FOR_FULL_ROTATION: i32 = 3200;
     const MICROS_PULSE: u64 = 100;
-    const MICROS_SPEED_CONTROL: u64 = 5000;
+    const MICROS_SPEED_CONTROL: u64 = 4000;
 
 
-    pub async fn move_pulses(step: &LED, number_images: &i32) {
-        let step = step.clone();
-        tokio::task::spawn(async move {
-            let pulses: usize = STEPS_FOR_FULL_ROTATION as usize / *number_images as usize;
-            for _ in 0..pulses {
-                step.on();
-                thread::sleep(Duration::from_micros(MICROS_PULSE));
-                step.off();
-                thread::sleep(Duration::from_micros(MICROS_SPEED_CONTROL));
-            }
-        }).await.expect("unable to spawn task")
+    pub fn move_pulses(step: &LED, number_images: &i32) {
+        let pulses: usize = STEPS_FOR_FULL_ROTATION as usize / *number_images as usize;
+        for _ in 0..pulses {
+            step.on();
+            thread::sleep(Duration::from_micros(MICROS_PULSE));
+            step.off();
+            thread::sleep(Duration::from_micros(MICROS_SPEED_CONTROL));
+        }
     }
 }
 
 mod camera {
-    use std::{thread, time};
-
+    use std::{time, thread};
     use rascam::*;
-    use tokio::sync::Mutex;
 
-    pub async fn start_camera() -> SimpleCamera {
+    pub fn start_camera() -> SimpleCamera {
         let info = info().unwrap();
         let mut camera = SimpleCamera::new(info.cameras[0].clone()).unwrap();
         camera.activate().unwrap();
@@ -147,27 +133,27 @@ mod camera {
         camera.take_one().expect("unable to take first initialization image");
         camera.take_one().expect("unable to take second initialization image");
         camera.take_one().expect("unable to take third initialization image");
+
         camera
     }
 }
 
 mod image_communication {
-    use tokio::sync::Mutex;
-
-    use crate::Fortschritt;
     use crate::image_store::ImageStore;
+    use crate::Fortschritt;
+    use std::sync::Mutex;
 
-    pub async fn update_status(fortschritt: &Mutex<Fortschritt>, current_round: i32, current_image: i32) {
-        let mut fortschritt = fortschritt.lock().await;
+    pub fn update_status(fortschritt: &Mutex<Fortschritt>, current_round: i32, current_image: i32) {
+        let mut fortschritt = fortschritt.lock().unwrap();
         fortschritt.set_aufnahme(current_image + 1);
         fortschritt.set_runde(current_round + 1);
     }
 
-    pub async fn store_new_image(image_store: &ImageStore, round: usize, image_nr: i32, image: &Vec<u8>) {
-        image_store.store_image(
+    pub fn store_new_image(image_store: &Mutex<ImageStore>, round: usize, image_nr: i32, image: &Vec<u8>) {
+        image_store.lock().unwrap().store_image(
             format!("{}_{}.jpg", round, image_nr),
-            &image,
-        ).await.expect("Error storing image");
+            &image
+        ).expect("Error storing image");
     }
 }
 
