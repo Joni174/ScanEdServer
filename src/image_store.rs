@@ -1,69 +1,66 @@
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use std::collections::HashSet;
+use tokio::io;
 use std::iter::FromIterator;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::fs::File;
-use std::io;
-use std::io::{Write, Read};
-use std::ops::Deref;
 
 pub struct ImageStore {
     image_list: Mutex<HashSet<String>>,
 }
 
 impl ImageStore {
-    pub fn new() -> io::Result<ImageStore> {
-        init_dir()?;
+    pub async fn new() -> io::Result<ImageStore> {
+        init_dir().await?;
         Ok(ImageStore { image_list: Mutex::new(HashSet::new()) })
     }
 
-    pub fn store_image(&self, name: String, image: &[u8]) -> io::Result<()> {
-        let mut image_list = self.image_list.lock().unwrap();
-        save_image(&name, image)?;
+    pub async fn store_image(&self, name: String, image: &[u8]) -> io::Result<()> {
+        let mut image_list = self.image_list.lock().await;
+        save_image(&name, &image).await?;
         image_list.insert(name);
         Ok(())
     }
 
-    pub fn get_image_list(&self) -> Vec<String> {
-        let image_list = self.image_list.lock().unwrap();
-        Vec::from_iter(image_list.deref().clone().into_iter())
+    pub async fn get_image_list(&self) -> Vec<String> {
+        Vec::from_iter(self.image_list.lock().await.clone().into_iter())
     }
 
-    pub fn get_image(&self, name: &String) -> Result<Vec<u8>, Option<io::Error>> {
-        let image_list = self.image_list.lock().unwrap();
+    pub async fn get_image(&self, name: &String) -> Result<Vec<u8>, Option<tokio::io::Error>> {
+        let image_list = self.image_list.lock().await;
         if image_list.contains(name) {
-            Ok(read_image(name).map_err(|err| Some(err))?)
+            Ok(read_image(name).await.map_err(|err| Some(err))?)
         } else {
             Err(None)
         }
     }
 
-    pub fn reset(&self) -> io::Result<()> {
-        let mut image_list = self.image_list.lock().unwrap();
-        image_list.clear();
-        init_dir()
+    pub async fn reset(&self) -> io::Result<()> {
+        self.image_list.lock().await.clear();
+        init_dir().await
     }
 }
 
-fn save_image(name: &str, img: &[u8]) -> Result<(), io::Error> {
-    let mut file = File::create(image_folder().join(name))?;
-    file.write_all(img)?;
+async fn save_image(name: &str, img: &[u8]) -> Result<(), io::Error> {
+    let mut file = File::create(image_folder().join(name)).await?;
+    file.write_all(img).await?;
     Ok(())
 }
 
-fn read_image(name: &str) -> io::Result<Vec<u8>> {
-    let mut file = File::open(image_folder().join(name))?;
+async fn read_image(name: &str) -> tokio::io::Result<Vec<u8>> {
+    let mut file = File::open(image_folder().join(name)).await?;
     let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
+    file.read_to_end(&mut buf).await?;
     Ok(buf)
 }
 
-fn init_dir() -> io::Result<()> {
+async fn init_dir() -> tokio::io::Result<()> {
     if image_folder().exists() {
-        std::fs::remove_dir_all(image_folder())?;
+        tokio::fs::remove_dir_all(image_folder()).await?;
     }
-    std::fs::create_dir(image_folder())?;
+    tokio::fs::create_dir_all(image_folder()).await?;
     Ok(())
 }
 
