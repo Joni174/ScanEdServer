@@ -62,7 +62,6 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
             if shutdown_message_arrived(&shutdown_rx) {
                 return;
             }
-            thread::sleep(Duration::from_millis(400));
             update_status(&progress.fortschritt, round as i32, image_nr);
         }
         info!("round finished")

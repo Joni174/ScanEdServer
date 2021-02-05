@@ -64,14 +64,18 @@ async fn reset(app_state: &Data<AppState>, shutdown_handle: &Arc<Mutex<bool>>) {
 async fn auftrag_get(data: web::Data<AppState>) -> impl Responder {
     info!("serving auftrag status");
     let state = data.fortschritt.lock().unwrap();
+    info!("serving auftrag status done");
     HttpResponse::Ok().json(state.deref())
 }
 
 #[get("/aufnahme")]
 async fn aufnahme_get(progress: web::Data<AppState>) -> impl Responder {
     info!("serving aufnahmen index");
-    let image_store = progress.image_store.lock().unwrap();
-    let image_list = image_store.get_image_list();
+    let image_list = tokio::task::spawn_blocking(move || {
+        let image_store = progress.image_store.lock().unwrap();
+        image_store.get_image_list()
+    }).await.unwrap();
+    info!("serving aufnahmen index done");
     let image_paths = image_list.iter()
         .map(|image_name| format!("/{}/{}", ENDPOINT_AUFNAHME, image_name))
         .collect::<Vec<_>>();
@@ -80,9 +84,14 @@ async fn aufnahme_get(progress: web::Data<AppState>) -> impl Responder {
 
 #[get("/aufnahme/{name}")]
 async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data<AppState>) -> impl Responder {
+    let image_name2 = image_name.0.clone();
     info!("serving aufnahme: {}", image_name.0);
-    let image = app_state.image_store.lock().unwrap();
-    match image.get_image(&image_name.0) {
+    let image = tokio::task::spawn_blocking(move || {
+        let image_lock = app_state.image_store.lock().unwrap();
+        image_lock.get_image(&image_name2)
+    }).await.unwrap();
+    info!("serving aufnahme: {} done", image_name.0);
+    match image {
         Ok(image) => {
             HttpResponse::Ok()
                 .header("Content-Type", "image/jpeg")
@@ -140,7 +149,7 @@ async fn main() -> std::io::Result<()> {
             .service(aufnahme_single_get)
             .app_data(state.clone()))
         .bind("0.0.0.0:8000")?
-        .workers(3)
+        .workers(2)
         .run()
         .await
 }

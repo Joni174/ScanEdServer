@@ -5,7 +5,6 @@ use std::str::FromStr;
 use std::fs::File;
 use std::io;
 use std::io::{Write, Read};
-use std::ops::Deref;
 
 pub struct ImageStore {
     image_list: HashSet<String>,
