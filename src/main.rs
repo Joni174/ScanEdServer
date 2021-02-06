@@ -90,7 +90,6 @@ async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data
         let image_lock = app_state.image_store.lock().unwrap();
         image_lock.get_image(&image_name2)
     }).await.unwrap();
-    info!("serving aufnahme: {} done", image_name.0);
     match image {
         Ok(image) => {
             HttpResponse::Ok()
