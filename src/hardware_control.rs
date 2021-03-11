@@ -32,7 +32,6 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
     let led_cam = LED::new(27);
     let mut button = Button::new(23);
 
-    let mut camera = start_camera();
 
     ms1.on();
     ms2.on();
@@ -42,8 +41,8 @@ fn motor_movement(progress: actix_web::web::Data<AppState>,
     led_error.on();
     led_user.on();
     led_cam.on();
-    thread::sleep(Duration::from_secs(1));
-
+    thread::sleep(Duration::from_secs(4));
+    let mut camera = start_camera();
     led_error.off();
     led_user.off();
     led_cam.off();

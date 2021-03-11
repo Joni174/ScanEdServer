@@ -20,7 +20,7 @@ pub struct Auftrag {
     pub auftrag: Vec<i32>
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Fortschritt {
     runde: i32,
     aufnahme: i32,
@@ -63,19 +63,21 @@ async fn reset(app_state: &Data<AppState>, shutdown_handle: &Arc<Mutex<bool>>) {
 #[get("/auftrag")]
 async fn auftrag_get(data: web::Data<AppState>) -> impl Responder {
     info!("serving auftrag status");
-    let state = data.fortschritt.lock().unwrap();
+    let state = tokio::task::spawn_blocking(move || {
+        data.fortschritt.lock().unwrap().deref().clone()
+    }).await.unwrap();
     info!("serving auftrag status done");
-    HttpResponse::Ok().json(state.deref())
+    HttpResponse::Ok().json(state)
 }
 
 #[get("/aufnahme")]
 async fn aufnahme_get(progress: web::Data<AppState>) -> impl Responder {
-    info!("serving aufnahmen index");
+    info!(">>> get aufnahmen index");
     let image_list = tokio::task::spawn_blocking(move || {
         let image_store = progress.image_store.lock().unwrap();
         image_store.get_image_list()
     }).await.unwrap();
-    info!("serving aufnahmen index done");
+    info!("<<< got aufnahmen index");
     let image_paths = image_list.iter()
         .map(|image_name| format!("/{}/{}", ENDPOINT_AUFNAHME, image_name))
         .collect::<Vec<_>>();
@@ -85,11 +87,12 @@ async fn aufnahme_get(progress: web::Data<AppState>) -> impl Responder {
 #[get("/aufnahme/{name}")]
 async fn aufnahme_single_get(image_name: web::Path<String>, app_state: web::Data<AppState>) -> impl Responder {
     let image_name2 = image_name.0.clone();
-    info!("serving aufnahme: {}", image_name.0);
+    info!(">>> get aufnahme: {}", image_name.0);
     let image = tokio::task::spawn_blocking(move || {
         let image_lock = app_state.image_store.lock().unwrap();
         image_lock.get_image(&image_name2)
     }).await.unwrap();
+    info!("<<< got aufnahme: {}", image_name.0);
     match image {
         Ok(image) => {
             HttpResponse::Ok()
